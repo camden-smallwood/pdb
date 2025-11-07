@@ -203,6 +203,8 @@ pub enum SymbolData<'t> {
     ProcedureReference(ProcedureReferenceSymbol<'t>),
     /// Reference to an imported variable.
     DataReference(DataReferenceSymbol<'t>),
+    /// Collection of annotation strings.
+    Annotation(AnnotationSymbol<'t>),
     /// Reference to an annotation.
     AnnotationReference(AnnotationReferenceSymbol<'t>),
     /// Reference to a managed procedure.
@@ -332,7 +334,8 @@ impl<'t> SymbolData<'t> {
             | Self::Inlinees(_)
             | Self::ArmSwitchTable(_)
             | Self::HeapAllocationSite(_)
-            | Self::FrameCookie(_) => None,
+            | Self::FrameCookie(_)
+            | Self::Annotation(_) => None,
         }
     }
 }
@@ -375,6 +378,7 @@ impl<'t> TryFromCtx<'t> for SymbolData<'t> {
             }
             S_TRAMPOLINE => Self::Trampoline(buf.parse_with(kind)?),
             S_DATAREF | S_DATAREF_ST => SymbolData::DataReference(buf.parse_with(kind)?),
+            S_ANNOTATION => SymbolData::Annotation(buf.parse_with(kind)?),
             S_ANNOTATIONREF => SymbolData::AnnotationReference(buf.parse_with(kind)?),
             S_TOKENREF => SymbolData::TokenReference(buf.parse_with(kind)?),
             S_EXPORT => SymbolData::Export(buf.parse_with(kind)?),
@@ -676,6 +680,40 @@ impl<'t> TryFromCtx<'t, SymbolKind> for DataReferenceSymbol<'t> {
             symbol_index,
             module,
             name,
+        };
+
+        Ok((symbol, buf.pos()))
+    }
+}
+
+/// Collection of annotation strings.
+///
+/// Symbol kind `S_ANNOTATION`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnnotationSymbol<'t> {
+    /// The offset of the annotated data.
+    pub offset: PdbInternalSectionOffset,
+    /// The strings of the annotation.
+    pub strings: Vec<RawString<'t>>,
+}
+
+impl<'t> TryFromCtx<'t, SymbolKind> for AnnotationSymbol<'t> {
+    type Error = Error;
+
+    fn try_from_ctx(this: &'t [u8], _kind: SymbolKind) -> Result<(Self, usize)> {
+        let mut buf = ParseBuffer::from(this);
+
+        let offset = buf.parse()?;
+        let string_count = buf.parse_u16()?;
+        let mut strings = vec![];
+
+        for _ in 0..string_count {
+            strings.push(buf.parse_cstring()?);
+        }
+
+        let symbol = AnnotationSymbol {
+            offset,
+            strings,
         };
 
         Ok((symbol, buf.pos()))
@@ -1683,7 +1721,9 @@ impl<'t> TryFromCtx<'t, SymbolKind> for RegisterRelativeSymbol<'t> {
 /// Thunk adjustor
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ThunkAdjustor<'t> {
+    /// The delta of the thunk.
     pub delta: u16,
+    /// The target of the thunk.
     pub target: RawString<'t>,
 }
 
