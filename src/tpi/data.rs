@@ -1195,7 +1195,7 @@ pub struct PointerType {
 }
 
 /// The information parsed from a type record with kind `LF_MODIFIER`.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ModifierType {
     pub underlying_type: TypeIndex,
     pub constant: bool,
