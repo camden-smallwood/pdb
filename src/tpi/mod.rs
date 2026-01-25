@@ -25,6 +25,7 @@ use self::primitive::type_data_for_primitive;
 pub use self::data::*;
 pub use self::id::*;
 pub use self::primitive::{Indirection, PrimitiveKind, PrimitiveType};
+pub use self::constants::*;
 
 /// Zero-copy access to a PDB type or id stream.
 ///
