@@ -191,6 +191,27 @@ where
     pub fn finder(&self) -> ItemFinder<'_, I> {
         ItemFinder::new(self, 3)
     }
+
+    /// Location of the hash-adjuster table within the hash stream, as
+    /// `(hash stream index, byte offset, byte length)`.
+    ///
+    /// The hash-adjuster table maps a type name (as a [`StringRef`] into `/names`) to the type
+    /// index that should be treated as the *current* definition for that name. When a type is
+    /// redefined across incremental builds, the linker appends a new record and leaves the stale
+    /// ones behind; this table records which record supersedes the naive "latest wins" default.
+    /// This is the mechanism DIA (and thus IDA) use to select a single canonical record among
+    /// duplicates. Returns `None` when the stream carries no adjuster table.
+    #[must_use]
+    pub fn hash_adjuster_location(&self) -> Option<(StreamIndex, usize, usize)> {
+        if self.header.hash_adj.size == 0 {
+            return None;
+        }
+        Some((
+            StreamIndex(self.header.tpi_hash_stream),
+            self.header.hash_adj.offset as usize,
+            self.header.hash_adj.size as usize,
+        ))
+    }
 }
 
 /// This buffer is used when a `Type` refers to a primitive type. It doesn't contain anything

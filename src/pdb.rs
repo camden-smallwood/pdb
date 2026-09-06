@@ -525,6 +525,85 @@ impl<'s, S: Source<'s> + 's> PDB<'s, S> {
         StringTable::parse(stream)
     }
 
+    /// Reads the TPI hash-adjuster table, mapping each adjusted type name to its canonical
+    /// [`TypeIndex`].
+    ///
+    /// When a type is redefined across (incremental) builds, MSVC's linker never rewrites the old
+    /// record — it appends a new one at a higher type index and leaves every stale generation in
+    /// the type stream. The default name resolution is "latest wins" (highest index); this table
+    /// records the exceptions where an *earlier* record is the real definition. Together they give
+    /// the rule DIA and IDA use to pick one record among duplicates:
+    ///
+    /// > canonical index for a name = `type_adjusters()[name]` if present, otherwise the
+    /// > highest-index non-forward-reference record with that name.
+    ///
+    /// Names with only a single definition never appear here. Returns an empty map when the PDB
+    /// carries no adjuster table.
+    ///
+    /// # Errors
+    ///
+    /// * `Error::StreamNotFound` if the hash stream or `/names` stream is missing
+    /// * `Error::IoError` if returned by the `Source`
+    pub fn type_adjusters(&mut self) -> Result<std::collections::HashMap<String, TypeIndex>> {
+        let location = {
+            let tpi = self.type_information()?;
+            tpi.hash_adjuster_location()
+        };
+        let (stream_index, offset, size) = match location {
+            Some(location) => location,
+            None => return Ok(std::collections::HashMap::new()),
+        };
+
+        // Copy the adjuster bytes out of the hash stream so we can release the borrow and then
+        // borrow the string table to resolve names.
+        let bytes = {
+            let stream = match self.raw_stream(stream_index)? {
+                Some(stream) => stream,
+                None => return Ok(std::collections::HashMap::new()),
+            };
+            let slice = stream.as_slice();
+            if offset + size > slice.len() {
+                return Err(Error::UnexpectedEof);
+            }
+            slice[offset..offset + size].to_vec()
+        };
+
+        let strings = self.string_table()?;
+
+        // The table is a serialized MSVC hash map: entry count, bucket capacity, a "present"
+        // bit-vector, a "deleted" bit-vector, then `count` (name-offset, type-index) pairs.
+        let read_u32 = |buf: &[u8], pos: usize| -> u32 {
+            u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]])
+        };
+        let mut map = std::collections::HashMap::new();
+        if bytes.len() < 8 {
+            return Ok(map);
+        }
+        let mut pos = 0usize;
+        let count = read_u32(&bytes, pos) as usize;
+        pos += 4;
+        pos += 4; // bucket capacity, unused
+        let present_words = read_u32(&bytes, pos) as usize;
+        pos += 4 + present_words * 4;
+        let deleted_words = read_u32(&bytes, pos) as usize;
+        pos += 4 + deleted_words * 4;
+
+        for _ in 0..count {
+            if pos + 8 > bytes.len() {
+                return Err(Error::UnexpectedEof);
+            }
+            let name_ref = read_u32(&bytes, pos);
+            pos += 4;
+            let type_index = read_u32(&bytes, pos);
+            pos += 4;
+            if let Ok(name) = strings.get(StringRef(name_ref)) {
+                map.insert(name.to_string().into_owned(), TypeIndex(type_index));
+            }
+        }
+
+        Ok(map)
+    }
+
     /// Retrieve a stream by its index to read its contents as bytes.
     ///
     /// # Errors
